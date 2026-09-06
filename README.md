@@ -30,6 +30,17 @@ python screenshot_x_app.py
 ```
 または `start_app.bat` をダブルクリックしてください（コンソール画面なしで起動します）。
 
+## exe化（Python不要で配布する）
+
+Pythonが入っていないPCにも配布できるよう、PyInstallerで単体の`.exe`にまとめられます。
+
+```bash
+pip install pyinstaller pyinstaller-hooks-contrib
+python -m PyInstaller --noconfirm --onefile --windowed --name screenshot-x screenshot_x_app.py
+```
+
+`dist\screenshot-x.exe` ができます（実行にはPlaywrightが操作する**Google Chrome**が別途PCに入っている必要があります。Chrome自体はexeに同梱されません）。ビルド成果物（`build/`・`dist/`・`*.spec`）は`.gitignore`で除外済みなので、配布はGitHub Releasesへのアップロードなど別の方法で行ってください。
+
 ## 免責事項
 
 - 本ツールは無保証で提供されます（現状有姿）。

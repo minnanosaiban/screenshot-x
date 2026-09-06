@@ -10,3 +10,9 @@ __pycache__/
 
 # 個人的なメモ（実アカウント名・実パス入り）。アプリ本体ではないので配布しない。
 ターミナル.txt
+
+# PyInstallerのビルド成果物。exeは数十MBあるのでリポジトリに入れず、
+# 配布時はGitHub Releasesにアップロードする。
+build/
+dist/
+*.spec

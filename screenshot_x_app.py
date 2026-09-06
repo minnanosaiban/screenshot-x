@@ -24,6 +24,7 @@ Xスクショ管理アプリ（画面版）。
 import json
 import queue
 import subprocess
+import sys
 import threading
 import tkinter as tk
 from datetime import date, datetime, timedelta
@@ -36,7 +37,13 @@ import screenshot_x_detail as detail
 import screenshot_x_export as export
 from screenshot_x import normalize_account
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+# PyInstallerでexe化した場合、__file__は実行のたびに変わる一時展開フォルダを指してしまい
+# (そのフォルダは終了時に消える)、設定(settings.json)が保存されなくなる。
+# 実行ファイル本体の場所を使うことで、sourceのまま動かした場合と同じ挙動をexeでも保つ。
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).resolve().parent
+else:
+    SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_PATH = SCRIPT_DIR / "settings.json"
 
 # 仕分け画面でのスクショの表示幅(論理px)。返信まで撮ると縦に長くなるため、

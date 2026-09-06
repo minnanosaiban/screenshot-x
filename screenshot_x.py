@@ -29,12 +29,20 @@ seen_ids.json で記憶していて重複保存しないので、差分だけ追
 import argparse
 import json
 import re
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+# PyInstallerでexe化した場合、__file__は実行のたびに変わる一時展開フォルダを指してしまい
+# (そのフォルダは終了時に消える)、ログインセッションが毎回消えてしまう。
+# 実行ファイル本体の場所を使うことで、sourceのまま動かした場合と同じ「隣にchrome_profileを作る」
+# 挙動をexeでも保つ。
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).resolve().parent
+else:
+    SCRIPT_DIR = Path(__file__).resolve().parent
 PROFILE_DIR = SCRIPT_DIR / "chrome_profile"  # ログインセッション保存用の専用プロファイル
 
 STOP_AFTER_OLD = 8     # 期間外(古い)ポストがこれだけ連続したら終了
