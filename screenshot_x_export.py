@@ -43,7 +43,7 @@ from screenshot_x_detail import (
 # スクショの左端にある固定メニューが占める幅の割合（幅875pxのうち約110px）。
 # 切れ目を探すときにこの範囲を見ないようにするために使う。
 NAV_COLUMN_RATIO = 0.14
-from screenshot_x import normalize_account
+from screenshot_x import launch_chromium, normalize_account
 
 # サイドノートアプリの画像ブロックが持っている削除ボタンのアイコン。
 # アプリが作るHTMLと同じ形にしておかないと、読み込んだ後の見た目が変わってしまう。
@@ -370,10 +370,10 @@ def export_pdf(archive: Archive, selected, path: Path, title: str, log=print, it
     )
     try:
         with sync_playwright() as p:
-            # 取得側と同じく、入っているGoogle Chromeを使う。
+            # 取得側と同じく、入っているGoogle Chrome(無ければEdge)を使う。
             # 既定のchromiumを使うと `playwright install chromium` が別途必要になり、
             # 取得は動くのに書き出しだけ失敗する、という分かりにくい状態になる。
-            browser = p.chromium.launch(headless=True, channel="chrome")
+            browser = launch_chromium(p.chromium, headless=True)
             page = browser.new_page()
             page.goto(html_path.resolve().as_uri(), wait_until="load")
             page.wait_for_timeout(500)   # 画像の描画待ち

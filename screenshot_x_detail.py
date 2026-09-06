@@ -66,6 +66,7 @@ from screenshot_x import (
     STOP_AFTER_OLD,
     STOP_AFTER_STALL,
     get_tweet_info,
+    launch_chromium,
     normalize_account,
     safe_goto,
 )
@@ -818,10 +819,10 @@ def run(
     saved = 0
 
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
+        context = launch_chromium(
+            p.chromium,
             str(PROFILE_DIR),
             headless=False,
-            channel="chrome",
             # no_viewport=True でないとページは実ウィンドウの幅ではなく既定の1280pxで組まれてしまい、
             # ウィンドウを狭くしても右サイドバーが消えない(viewport=Noneは「指定なし」の意味で効かない)
             no_viewport=True,

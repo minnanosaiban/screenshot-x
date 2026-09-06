@@ -45,6 +45,31 @@ else:
     SCRIPT_DIR = Path(__file__).resolve().parent
 PROFILE_DIR = SCRIPT_DIR / "chrome_profile"  # ログインセッション保存用の専用プロファイル
 
+# Chromeを優先し、入っていなければEdgeにフォールバックする際に試す順番。
+# EdgeもChromiumベースで、本アプリの画面キャプチャが頼るウィンドウクラス名(Chrome_WidgetWin_1)は
+# 共通のため、フォールバックしてもキャプチャ方式を変える必要はない。
+BROWSER_CHANNELS = ("chrome", "msedge")
+
+
+def launch_chromium(chromium, user_data_dir=None, **kwargs):
+    """Google Chromeを優先して起動し、無ければMicrosoft Edgeで起動する。
+
+    user_data_dir を渡すと launch_persistent_context、渡さないと launch を使う
+    (呼び出し元でどちらの起動方法か切り替える必要をなくすため)。
+    """
+    last_error = None
+    for i, channel in enumerate(BROWSER_CHANNELS):
+        try:
+            if user_data_dir is not None:
+                return chromium.launch_persistent_context(user_data_dir, channel=channel, **kwargs)
+            return chromium.launch(channel=channel, **kwargs)
+        except Exception as e:
+            last_error = e
+            remaining = BROWSER_CHANNELS[i + 1:]
+            if remaining:
+                print(f"{channel} が見つかりませんでした。{remaining[0]} で試します。")
+    raise last_error
+
 STOP_AFTER_OLD = 8     # 期間外(古い)ポストがこれだけ連続したら終了
 STOP_AFTER_STALL = 4   # スクロールしても新しいポストが増えない回数がこれだけ続いたら終了
 
@@ -190,10 +215,10 @@ def run(account_url: str, handle: str, days: int, out_dir: Path):
     saved = 0
     with sync_playwright() as p:
         # headless(画面非表示)だとX側のbot対策でブロックされるため、画面表示ありで実行する。
-        context = p.chromium.launch_persistent_context(
+        context = launch_chromium(
+            p.chromium,
             str(PROFILE_DIR),
             headless=False,
-            channel="chrome",
             viewport=None,  # 固定サイズにすると画面より大きくなりスクロールできなくなるため、実ウィンドウのサイズをそのまま使う
             locale="ja-JP",
             args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
