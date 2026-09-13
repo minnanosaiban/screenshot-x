@@ -1,47 +1,49 @@
 # screenshot-x
 
-## このアプリについて
+X（Twitter）の公開アカウントの投稿を、後から証拠として提出できる形でスクリーンショット保存・管理するデスクトップアプリです。
 
-- X（Twitter）の公開アカウントの投稿を、後から証拠として提出できる形でスクリーンショット保存・管理するデスクトップアプリです。
-- 「取得 → 仕分け → 書き出し」の3タブ構成（画面版・`screenshot_x_app.py`）。
-  - **取得**: アカウント名と期間を指定すると、投稿を1件ずつ開いてブラウザウィンドウ全体（アドレスバーに投稿URLが写った状態）をスクリーンショット保存します。返信も含めて下までスクロールしながら1枚の縦長画像に繋げる撮り方にも対応。
-  - **仕分け**: 貯めたスクショを1枚ずつ表示し、キー1つ（1/2/3）で重要度を採点します。
-  - **書き出し**: 期間・重要度で絞り込み、PDF／[サイドノートアプリ](https://sidenote-pdf.pages.dev/)用JSON／提出用フォルダ（連番コピー＋一覧CSV）を作成します。
-- 詳しい操作手順は [使い方.md](使い方.md) を参照してください。
-- **Windows専用**（ウィンドウ本体を直接キャプチャする方式でWindows APIに依存しています）。
-- **処理はすべてローカルで完結**します。取得したスクショ・ログイン情報は自分のPCにのみ保存され、どこにも送信されません。
+- **取得**: アカウント名と期間を指定すると、投稿を1件ずつ開いてブラウザウィンドウ全体（アドレスバーに投稿URLが写った状態）をスクリーンショット保存します。返信も含めて下までスクロールしながら1枚の縦長画像に繋げる撮り方にも対応。
+- **仕分け**: 貯めたスクショを1枚ずつ表示し、キー1つ（1/2/3）で重要度を採点します。
+- **書き出し**: 期間・重要度で絞り込み、PDF／[サイドノートアプリ](https://sidenote-pdf.pages.dev/)用JSON／提出用フォルダ（連番コピー＋一覧CSV）を作成します。
 
-## 動作環境
+**処理はすべてこのパソコンの中だけで行われます。** 取得したスクショやログイン情報はパソコンに保存されるだけで、どこにも送信されません。
 
-- Windows
-- Python 3.10以降
-- お使いのPCに **Google Chrome** がインストールされていること（Playwrightが持つ別ブラウザではなく、実際のChromeを操作します）
+---
 
-## ローカルで動かす
+## ダウンロードして使う（プログラミングの知識は不要です）
 
-```bash
-pip install -r requirements.txt
-```
+### 必要なもの
 
-初回起動時、未ログイン状態だと「Xにログインしていません」というダイアログが出ます。開いたChromeで手動ログインしてください。ログイン状態は本アプリ専用の `chrome_profile` フォルダ（このリポジトリには含まれません）に保存され、次回以降は自動でログイン状態になります（普段お使いのChromeプロファイルとは別物です）。
+- Windowsパソコン
+- Google Chrome または Microsoft Edge（Edgeは多くのWindowsパソコンに最初から入っています。どちらか一方があれば大丈夫です）
 
-```bash
-python screenshot_x_app.py
-```
-または `start_app.bat` をダブルクリックしてください（コンソール画面なしで起動します）。
+Pythonのインストールは不要です。
 
-デスクトップにアイコン付きのショートカットを置きたい場合は、`デスクトップにショートカット作成.bat` をダブルクリックしてください（`start_app.bat` を指す「screenshot-x」というショートカットが `icon.ico` のアイコン付きでデスクトップにできます。何度実行しても上書きされるだけです）。
+### 1. exeファイルをダウンロードする
 
-## exe化（Python不要で配布する）
+[Releasesページ](https://github.com/minnanosaiban/screenshot-x/releases/latest) を開き、一番上の「Assets」を開いて **`screenshot-x.exe`** をクリックしてダウンロードします。
 
-Pythonが入っていないPCにも配布できるよう、PyInstallerで単体の`.exe`にまとめられます。
+ダウンロードした `screenshot-x.exe` は、デスクトップなど分かりやすい場所に置いてください（ファイル1つだけで動きます）。
 
-```bash
-pip install pyinstaller pyinstaller-hooks-contrib
-python -m PyInstaller --noconfirm --onefile --windowed --name screenshot-x screenshot_x_app.py
-```
+### 2. 起動する
 
-`dist\screenshot-x.exe` ができます（実行にはPlaywrightが操作する**Google Chrome**が別途PCに入っている必要があります。Chrome自体はexeに同梱されません）。ビルド成果物（`build/`・`dist/`・`*.spec`）は`.gitignore`で除外済みなので、配布はGitHub Releasesへのアップロードなど別の方法で行ってください。
+`screenshot-x.exe` をダブルクリックします。
+
+初回は Windows が「Windows によって PC が保護されました」という青い画面を出すことがあります。これは、作者が個人でWindowsに登録料を払って署名していないために出る一般的な警告で、ウイルスという意味ではありません。**「詳細情報」をクリックし、次に出てくる「実行」を押してください。**
+
+起動すると、タイトルが **「Xスクショ管理」** の窓が開きます（黒いコンソール画面は出ません）。
+
+初回のみ、Chromeが開いて「Xにログインしていません」というダイアログが出ます。開いたChromeで手動でXにログインしてください。ログイン状態は専用の保存領域に記録され、次回以降は聞かれません（普段お使いのブラウザのログインとは別物として扱われます）。
+
+### 3. デスクトップにアイコン付きのショートカットを置きたいとき
+
+`screenshot-x.exe` を右クリック → 「その他のオプションを表示」→「ショートカットの作成」で、好きな場所に置けます（Windows標準の操作です）。
+
+### 4. 使い方
+
+タブは **取得 → 仕分け → 書き出し** の順に進みます。詳しい操作手順は [使い方.md](使い方.md) を参照してください。
+
+---
 
 ## 免責事項
 
@@ -50,6 +52,40 @@ python -m PyInstaller --noconfirm --onefile --windowed --name screenshot-x scree
 - 本ツールの利用により生じたいかなる損害についても作成者は責任を負いません。
 - 取得した投稿の内容・利用目的についての責任は利用者に帰属します。
 
-## 運用上の注意
+---
+
+## ソースから動かす（開発者向け）
+
+普段は上記のexe配布で十分です。コードを自分で動かしたい・改造したい場合のみ、以下を参照してください。
+
+### 動作環境
+
+- Windows
+- Python 3.10以降
+- お使いのPCに **Google Chrome** がインストールされていること（Playwrightが持つ別ブラウザではなく、実際のChromeを操作します）
+
+### セットアップと起動
+
+```bash
+pip install -r requirements.txt
+python screenshot_x_app.py
+```
+
+または `start_app.bat` をダブルクリックしてください（コンソール画面なしで起動します）。
+
+デスクトップにアイコン付きのショートカットを置きたい場合は、`デスクトップにショートカット作成.bat` をダブルクリックしてください（`start_app.bat` を指す「screenshot-x」というショートカットが `icon.ico` のアイコン付きでデスクトップにできます。何度実行しても上書きされるだけです）。
+
+### exe化（Python不要で配布する）
+
+Pythonが入っていないPCにも配布できるよう、PyInstallerで単体の`.exe`にまとめられます。
+
+```bash
+pip install pyinstaller pyinstaller-hooks-contrib
+python -m PyInstaller --noconfirm --onefile --windowed --icon icon.ico --name screenshot-x screenshot_x_app.py
+```
+
+`dist\screenshot-x.exe` ができます（実行にはPlaywrightが操作する**Google Chrome**または**Microsoft Edge**が別途PCに入っている必要があります。ブラウザ自体はexeに同梱されません）。ビルド成果物（`build/`・`dist/`・`*.spec`）は`.gitignore`で除外済みなので、配布はGitHub Releasesへのアップロードで行います。
+
+### 運用上の注意
 
 - `chrome_profile/`（ログインセッション）・`settings.json`（入力した実アカウント名やローカルの保存先パスを覚えているだけのファイル）・実際に取得したスクリーンショット（`x_archive` 等）は `.gitignore` で除外済みです。**これらはコミット・pushしないでください。**
