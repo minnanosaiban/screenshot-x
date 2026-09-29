@@ -30,6 +30,7 @@ import tkinter as tk
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 from PIL import Image, ImageTk
 
@@ -56,11 +57,81 @@ TRIAGE_VIEW_MAX_HEIGHT = 700
 TRIAGE_VIEW_MIN_HEIGHT = 360
 
 
+# ---- 見た目（サイドノート / pdf-tools と同じデザイントークン） ----
+COLOR_TEXT = "#1e2126"
+COLOR_MUTED = "#4d4d4d"
+COLOR_MUTED2 = "#71717a"
+COLOR_BORDER = "#e5e5e5"
+COLOR_PAGE = "#f4f5f7"     # 画面全体の背景
+COLOR_HERO = "#eef0f3"     # 上部の帯
+COLOR_SWATCH = "#f2f2f2"   # 「機能」ボタンの地色
+COLOR_SWATCH_HOVER = "#e8e8ea"
+
+
+def apply_theme(root):
+    """ttkの見た目を、サイドノート風（グレー地・白いカード・黒い選択ボタン）に寄せる。
+    tkinterは角丸や影を描けないので、配色・余白・枠線・選択中の黒反転だけを合わせている。"""
+    root.configure(background=COLOR_PAGE)
+    families = set(tkfont.families())
+    family = next((f for f in ("Yu Gothic UI", "Meiryo UI", "Segoe UI") if f in families), None)
+    if family:
+        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+            tkfont.nametofont(name).configure(family=family, size=10)
+    fam = family or "TkDefaultFont"
+
+    st = ttk.Style(root)
+    st.theme_use("clam")
+    st.configure(".", background="white", foreground=COLOR_TEXT, bordercolor=COLOR_BORDER,
+                 lightcolor="white", darkcolor="white", focuscolor="white", troughcolor=COLOR_SWATCH)
+
+    # ページ地（カードの外側）に置く部品用
+    st.configure("Page.TFrame", background=COLOR_PAGE)
+    st.configure("Page.TLabel", background=COLOR_PAGE, foreground=COLOR_MUTED)
+    st.configure("Hero.TFrame", background=COLOR_HERO)
+    st.configure("HeroTitle.TLabel", background=COLOR_HERO, foreground=COLOR_TEXT, font=(fam, 20, "bold"))
+    st.configure("HeroDesc.TLabel", background=COLOR_HERO, foreground=COLOR_MUTED, font=(fam, 11))
+    st.configure("HeroNote.TLabel", background=COLOR_HERO, foreground=COLOR_MUTED2, font=(fam, 9))
+    st.configure("HeroHead.TLabel", background=COLOR_HERO, foreground=COLOR_TEXT, font=(fam, 11, "bold"))
+
+    # 通常のボタン＝白抜き、Primary＝黒塗り、Swatch＝「機能」ボタン（選択中は黒に反転）
+    st.configure("TButton", background="white", foreground=COLOR_TEXT, bordercolor="#d4d4d8",
+                 padding=(14, 6), relief="flat", borderwidth=1)
+    st.map("TButton", background=[("disabled", "#f5f6f8"), ("active", "#f4f4f5")],
+           foreground=[("disabled", "#b7bac2")], bordercolor=[("disabled", "#eeeeee")])
+    st.configure("Primary.TButton", background=COLOR_TEXT, foreground="white", bordercolor=COLOR_TEXT,
+                 padding=(16, 6))
+    st.map("Primary.TButton", background=[("disabled", "#f5f6f8"), ("active", "#262626")],
+           foreground=[("disabled", "#b7bac2")], bordercolor=[("disabled", "#eeeeee")])
+    st.configure("Swatch.TButton", background=COLOR_SWATCH, foreground=COLOR_TEXT, bordercolor=COLOR_BORDER,
+                 padding=(10, 8))
+    st.map("Swatch.TButton", background=[("active", COLOR_SWATCH_HOVER)])
+    st.configure("SwatchSel.TButton", background=COLOR_TEXT, foreground="white", bordercolor=COLOR_TEXT,
+                 padding=(10, 8), font=(fam, 10, "bold"))
+    st.map("SwatchSel.TButton", background=[("active", COLOR_TEXT)])
+
+    for name in ("TCheckbutton", "TRadiobutton"):
+        st.configure(name, background="white", indicatorcolor="white", indicatorbackground="white")
+        st.map(name, background=[("active", "white")],
+               indicatorcolor=[("selected", COLOR_TEXT)], indicatorbackground=[("selected", COLOR_TEXT)])
+
+    for name in ("TEntry", "TCombobox", "TSpinbox"):
+        st.configure(name, fieldbackground="white", bordercolor=COLOR_BORDER, padding=5)
+        st.map(name, bordercolor=[("focus", COLOR_TEXT)])
+    st.configure("Vertical.TScrollbar", background=COLOR_SWATCH, troughcolor="white", bordercolor="white",
+                 arrowcolor=COLOR_MUTED2)
+
+    # タブ帯は隠す（切り替えは上部の「機能」ボタンで行う）。中身の枠だけをカード風に残す。
+    st.layout("TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+    st.layout("TNotebook.Tab", [])
+    st.configure("TNotebook", background=COLOR_PAGE, bordercolor=COLOR_BORDER, borderwidth=1, tabmargins=0)
+
+
 class App:
     def __init__(self, root):
         self.root = root
         root.title("Xスクショ管理")
         root.minsize(700, 620)
+        apply_theme(root)
 
         self.messages = queue.Queue()   # 作業スレッド → 画面 への連絡
         self.worker = None
@@ -103,6 +174,7 @@ class App:
             key: tk.BooleanVar(value=saved_items.get(key, True)) for key in export.NOTE_ITEMS
         }
 
+        self.build_hero()
         self.build_header()
         self.build_tabs()
         self.build_log()
@@ -117,8 +189,28 @@ class App:
 
     # ------------------------------------------------------------ 画面（共通）
 
+    def build_hero(self):
+        """上部の帯（sidenote / pdf-tools のヒーローと同じ構成）。アプリ名・一言・「機能」ボタン。
+        「機能」ボタンは、タブ帯を隠したNotebookを切り替える（build_tabsで作る）。"""
+        hero = ttk.Frame(self.root, style="Hero.TFrame", padding=(20, 14, 20, 12))
+        hero.pack(fill="x")
+        ttk.Label(hero, text="Xスクショ管理", style="HeroTitle.TLabel").pack(anchor="w")
+        ttk.Label(hero, text="Xの投稿を、証拠として提出できる形で。", style="HeroDesc.TLabel").pack(
+            anchor="w", pady=(2, 0))
+        ttk.Label(hero, text="処理はすべてこのパソコンの中だけで行われ、外部には送信されません。",
+                  style="HeroNote.TLabel").pack(anchor="w", pady=(2, 8))
+        row = ttk.Frame(hero, style="Hero.TFrame")
+        row.pack(anchor="w")
+        ttk.Label(row, text="機能", style="HeroHead.TLabel").pack(side="left", padx=(0, 12))
+        self.swatch_row = row
+        tk.Frame(self.root, height=1, background=COLOR_BORDER).pack(fill="x")
+
     def build_header(self):
-        frame = ttk.Frame(self.root, padding=(12, 12, 12, 0))
+        outer = ttk.Frame(self.root, style="Page.TFrame", padding=(16, 12, 16, 0))
+        outer.pack(fill="x")
+        card = tk.Frame(outer, background="white", highlightthickness=1, highlightbackground=COLOR_BORDER)
+        card.pack(fill="x")
+        frame = ttk.Frame(card, padding=(14, 10, 14, 10))
         frame.pack(fill="x")
         frame.columnconfigure(1, weight=1)
 
@@ -134,7 +226,9 @@ class App:
         ttk.Button(frame, text="変更…", command=self.choose_root).grid(row=1, column=2, sticky="e")
 
     def build_tabs(self):
-        book = ttk.Notebook(self.root, padding=(12, 8))
+        holder = ttk.Frame(self.root, style="Page.TFrame", padding=(16, 12, 16, 0))
+        holder.pack(fill="x")
+        book = ttk.Notebook(holder, padding=(12, 8))
         book.pack(fill="x")
         self.build_get_tab(book)
         self.build_triage_tab(book)
@@ -142,8 +236,23 @@ class App:
         book.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self.book = book
 
+        # 「機能」ボタン：押すとそのタブへ切り替わり、選ばれているものが黒く反転する
+        self.swatches = []
+        for i in range(len(book.tabs())):
+            button = ttk.Button(self.swatch_row, text=book.tab(i, "text"), style="Swatch.TButton",
+                                width=12, command=lambda n=i: book.select(n))
+            button.pack(side="left", padx=(0, 8))
+            self.swatches.append(button)
+        self.sync_swatches()
+
+    def sync_swatches(self):
+        current = self.book.index(self.book.select())
+        for i, button in enumerate(self.swatches):
+            button.configure(style="SwatchSel.TButton" if i == current else "Swatch.TButton")
+
     def on_tab_changed(self, _event=None):
         """仕分けタブに切り替わったときだけ読み込む（取得の直後でも最新になる）"""
+        self.sync_swatches()
         triage = self.book.tab(self.book.select(), "text") == "仕分け"
         if not triage:
             self.commit_memo()   # 書きかけのメモを捨てずに保存してから離れる
@@ -193,7 +302,7 @@ class App:
 
         bar = ttk.Frame(tab)
         bar.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        self.start_button = ttk.Button(bar, text="取得を開始", command=self.start_capture)
+        self.start_button = ttk.Button(bar, text="取得を開始", command=self.start_capture, style="Primary.TButton")
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(bar, text="中止", command=self.stop, state="disabled")
         self.stop_button.pack(side="left", padx=(8, 0))
@@ -228,7 +337,7 @@ class App:
         view.pack(side="left", anchor="n")
         self.triage_canvas = tk.Canvas(
             view, width=TRIAGE_IMAGE_WIDTH, height=TRIAGE_VIEW_MAX_HEIGHT,
-            highlightthickness=1, highlightbackground="#999", background="white", cursor="hand2",
+            highlightthickness=1, highlightbackground=COLOR_BORDER, background="white", cursor="hand2",
         )
         scroll = ttk.Scrollbar(view, orient="vertical", command=self.triage_canvas.yview)
         self.triage_canvas.configure(yscrollcommand=scroll.set)
@@ -259,7 +368,9 @@ class App:
                   foreground="#666", justify="left").pack(anchor="w", pady=(0, 4))
         memo_box = ttk.Frame(side)
         memo_box.pack(anchor="w", fill="x")
-        self.triage_memo = tk.Text(memo_box, width=26, height=10, wrap="word")
+        self.triage_memo = tk.Text(memo_box, width=26, height=10, wrap="word", relief="flat",
+                                   highlightthickness=1, highlightbackground=COLOR_BORDER,
+                                   highlightcolor=COLOR_TEXT, padx=8, pady=6)
         memo_scroll = ttk.Scrollbar(memo_box, command=self.triage_memo.yview)
         self.triage_memo.configure(yscrollcommand=memo_scroll.set)
         self.triage_memo.pack(side="left")
@@ -313,7 +424,7 @@ class App:
 
         bar = ttk.Frame(tab)
         bar.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        self.export_button = ttk.Button(bar, text="書き出す", command=self.start_export)
+        self.export_button = ttk.Button(bar, text="書き出す", command=self.start_export, style="Primary.TButton")
         self.export_button.pack(side="left")
         ttk.Button(bar, text="書き出し先を開く", command=self.open_export_dir).pack(side="left", padx=(8, 0))
 
@@ -325,20 +436,22 @@ class App:
         ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
     def build_log(self):
-        frame = ttk.Frame(self.root, padding=(12, 4))
+        frame = ttk.Frame(self.root, style="Page.TFrame", padding=(16, 12, 16, 4))
         frame.pack(fill="both", expand=True)
         self.log_frame = frame
-        self.log_box = tk.Text(frame, height=12, wrap="word", state="disabled")
+        self.log_box = tk.Text(frame, height=12, wrap="word", state="disabled", background="white",
+                               relief="flat", highlightthickness=1, highlightbackground=COLOR_BORDER,
+                               padx=10, pady=8)
         scroll = ttk.Scrollbar(frame, command=self.log_box.yview)
         self.log_box.configure(yscrollcommand=scroll.set)
         self.log_box.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
     def build_statusbar(self):
-        bar = ttk.Frame(self.root, padding=(12, 0, 12, 12))
+        bar = ttk.Frame(self.root, style="Page.TFrame", padding=(16, 4, 16, 14))
         bar.pack(fill="x")
         self.status_bar = bar
-        ttk.Label(bar, textvariable=self.status).pack(side="left")
+        ttk.Label(bar, textvariable=self.status, style="Page.TLabel").pack(side="left")
         ttk.Button(bar, text="保存先を開く", command=self.open_archive_dir).pack(side="right")
 
     def show_log(self, visible: bool):
