@@ -55,20 +55,28 @@ import json
 import os
 import random
 import re
+import sys
 from ctypes import wintypes
 from datetime import date, datetime, time as time_of_day, timedelta
 from pathlib import Path
 
 from PIL import Image, ImageGrab
 
+if sys.platform != "win32":
+    raise RuntimeError("このツールはWindows専用です（ウィンドウのキャプチャにWin32 APIを使うため）。")
+
 from screenshot_x import (
     PROFILE_DIR,
     STOP_AFTER_OLD,
     STOP_AFTER_STALL,
+    MONTHS_EN,
+    cli_login_prompt,
+    ensure_logged_in,
     get_tweet_info,
     launch_chromium,
     normalize_account,
     safe_goto,
+    scroll_one_step,
 )
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -187,18 +195,30 @@ def parse_args():
 
 
 def parse_exact_datetime(aria_label: str):
-    """個別ページの日時リンクの aria-label (例: '午後11:56 · 2026年9月2日') を厳密にパースする"""
+    """個別ページの日時リンクの aria-label を厳密にパースする。
+    日本語表示 (例: '午後11:56 · 2026年9月2日') と、アカウントの表示言語が英語のとき
+    (例: '11:56 PM · Sep 2, 2026') の両方を読む。"""
+    label = aria_label or ""
     m = re.search(
-        r"(午前|午後)\s*(\d{1,2}):(\d{2})\s*[·・]\s*(\d{4})年(\d{1,2})月(\d{1,2})日",
-        aria_label or "",
+        r"(午前|午後)\s*(\d{1,2}):(\d{2})\s*[·・]\s*(\d{4})年(\d{1,2})月(\d{1,2})日", label
     )
-    if not m:
-        return None
-    ampm, hh, mm, y, mo, d = m.groups()
+    if m:
+        ampm, hh, mm, y, mo, d = m.groups()
+        pm = ampm == "午後"
+    else:
+        m = re.search(
+            r"(\d{1,2}):(\d{2})\s*(AM|PM)\s*[·・]\s*([A-Za-z]{3})[a-z]*\.? (\d{1,2}), (\d{4})",
+            label, re.IGNORECASE,
+        )
+        if not m or m.group(4).title() not in MONTHS_EN:
+            return None
+        hh, mm, ampm, mon, d, y = m.groups()
+        mo = MONTHS_EN.index(mon.title()) + 1
+        pm = ampm.upper() == "PM"
     hh = int(hh)
-    if ampm == "午後" and hh != 12:
+    if pm and hh != 12:
         hh += 12
-    if ampm == "午前" and hh == 12:
+    if not pm and hh == 12:
         hh = 0
     try:
         return datetime(int(y), int(mo), int(d), hh, int(mm))
@@ -215,6 +235,14 @@ def get_exact_posted_at(page, handle_lower: str, tweet_id: str):
             dt = parse_exact_datetime(link.get_attribute("aria-label"))
             if dt:
                 return dt
+            # aria-label から読めなかったときの予備: <time datetime="…Z"> はUTCなのでローカル時刻に直す
+            time_el = link.query_selector("time[datetime]")
+            if time_el:
+                try:
+                    iso = (time_el.get_attribute("datetime") or "").replace("Z", "+00:00")
+                    return datetime.fromisoformat(iso).astimezone().replace(tzinfo=None)
+                except ValueError:
+                    pass
     return None
 
 
@@ -236,6 +264,22 @@ def wait_for_articles(page, timeout_ms=20000, log=print):
         except PlaywrightTimeoutError:
             log("  投稿を読み込めませんでした(表示できないアカウント、またはX側の一時的な問題の可能性)。")
             return False
+
+
+UNAVAILABLE_MARKERS = (
+    "存在しません", "削除されました", "表示できません", "非公開", "アカウントは凍結",
+    "doesn't exist", "doesn’t exist", "been deleted", "unavailable", "suspended", "protected",
+)
+
+
+def post_unavailable(page):
+    """削除済み・非公開・凍結などで、投稿そのものが見られない状態か。
+    こういう投稿は一時的な読み込み失敗ではないので、連続失敗(ブロックの疑い)には数えない。"""
+    try:
+        text = page.evaluate("document.body ? document.body.innerText : ''") or ""
+    except Exception:
+        return False
+    return any(marker in text for marker in UNAVAILABLE_MARKERS)
 
 
 def wait_until_settled(page, timeout_ms=8000):
@@ -386,6 +430,19 @@ def grab_window_cropped(cdp, hwnd, metrics):
     return image.crop((inset, 0, width - inset, height - inset))
 
 
+def page_background_color(page):
+    """ページの背景色(R, G, B)。ライト/ダーク/ディムのどれでも、継ぎ足しで消した領域を
+    背景と同じ色で塗るために使う。取れなければ白。"""
+    try:
+        text = page.evaluate("getComputedStyle(document.body).backgroundColor") or ""
+        m = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", text)
+        if m:
+            return tuple(int(v) for v in m.groups())
+    except Exception:
+        pass
+    return (255, 255, 255)
+
+
 def find_discover_offset(page):
     """Xが返信の下に出す「もっと見つける」（無関係な他人の投稿の推薦）が始まる位置を、
     ページ先頭からの距離(CSS px)で返す。見つからなければ None。
@@ -450,7 +507,7 @@ def capture_window_full(cdp, hwnd, page, filepath: Path, metrics, max_screens=12
 
     左のメニューは画面に固定されているので、そのまま継ぎ足すと同じものが何度も写る。
     右端のスクロールバーも同様に、継ぎ足すたびに断片が並んでしまう。
-    どちらも2枚目以降は白で塗って消す。"""
+    どちらも2枚目以降はページの背景色で塗って消す。"""
     # 返信への投稿では、Xが元の投稿を上に表示して自動で下へスクロールした状態で開く。
     # そのまま撮ると上の部分が抜け落ち、「もっと見つける」の位置計算もずれるので、
     # 必ず先頭へ戻してから撮り始める。
@@ -475,6 +532,7 @@ def capture_window_full(cdp, hwnd, page, filepath: Path, metrics, max_screens=12
         max(0, page.evaluate("window.innerWidth - document.documentElement.clientWidth")) * dpr
     )
 
+    background = page_background_color(page)
     pieces = [first]
     previous_y = page.evaluate("window.scrollY")
     for _ in range(max_screens - 1):
@@ -495,9 +553,9 @@ def capture_window_full(cdp, hwnd, page, filepath: Path, metrics, max_screens=12
             grown = window_height
         strip = shot.crop((0, window_height - grown, width, window_height))
         if nav_right_px > 0:
-            strip.paste((255, 255, 255), (0, 0, nav_right_px, strip.height))
+            strip.paste(background, (0, 0, nav_right_px, strip.height))
         if scrollbar_px > 0:
-            strip.paste((255, 255, 255), (width - scrollbar_px, 0, width, strip.height))
+            strip.paste(background, (width - scrollbar_px, 0, width, strip.height))
         pieces.append(strip)
         previous_y = current_y
         if page.evaluate(
@@ -508,7 +566,7 @@ def capture_window_full(cdp, hwnd, page, filepath: Path, metrics, max_screens=12
         log(f"  ※ {max_screens}画面ぶんで打ち切りました（返信が非常に多い投稿です）")
 
     total = sum(piece.height for piece in pieces)
-    canvas = Image.new("RGB", (width, total), "white")
+    canvas = Image.new("RGB", (width, total), background)
     y = 0
     for piece in pieces:
         canvas.paste(piece, (0, y))
@@ -704,24 +762,6 @@ class Archive:
         ]
 
 
-def cli_login_prompt():
-    """コマンドラインから実行したときのログイン待ち"""
-    print("=" * 60)
-    print("Xにログインしていません。開いたブラウザ画面で手動でログインしてください。")
-    print("ログインしてタイムライン(ホーム)が表示されたら、このターミナルに戻って")
-    print("Enterキーを押してください。")
-    print("=" * 60)
-    input("ログイン完了後、Enterキーを押してください... ")
-
-
-def ensure_logged_in(page, on_login_required):
-    """ログイン状態を確認し、未ログインなら on_login_required() で完了を待つ"""
-    safe_goto(page, "https://x.com/home")
-    page.wait_for_timeout(2000)
-    if not page.url.rstrip("/").endswith("/home"):
-        on_login_required()
-
-
 def discover_ids(page, handle_lower: str, start: datetime, end: datetime, log=print, should_stop=None):
     """タイムラインをスクロールし、期間内の投稿IDを古い順のリストで返す。
 
@@ -776,7 +816,7 @@ def discover_ids(page, handle_lower: str, start: datetime, end: datetime, log=pr
             log(f"{start:%Y-%m-%d} より古いポストが続いたため収集を終了します。")
             break
 
-        page.mouse.wheel(0, 4000)
+        scroll_one_step(page)
         page.wait_for_timeout(1800)
 
         new_height = page.evaluate("document.body.scrollHeight")
@@ -870,6 +910,11 @@ def run(
                 try:
                     safe_goto(page, url)
                     if not wait_for_articles(page, log=log):
+                        if post_unavailable(page):
+                            log(f"  スキップ (status/{tid}): 削除または非公開の投稿のようです")
+                            on_progress(index + 1, len(todo))
+                            page.wait_for_timeout(random.randint(800, 1500))
+                            continue
                         consecutive_load_failures += 1
                         log(f"  スキップ (status/{tid}): 投稿を読み込めなかったため次回実行時に再試行されます")
                         if consecutive_load_failures >= MAX_CONSECUTIVE_LOAD_FAILURES:

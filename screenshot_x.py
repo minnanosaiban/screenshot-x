@@ -32,6 +32,7 @@ import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -70,6 +71,8 @@ def launch_chromium(chromium, user_data_dir=None, **kwargs):
                 print(f"{channel} が見つかりませんでした。{remaining[0]} で試します。")
     raise last_error
 
+MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
 STOP_AFTER_OLD = 8     # 期間外(古い)ポストがこれだけ連続したら終了
 STOP_AFTER_STALL = 4   # スクロールしても新しいポストが増えない回数がこれだけ続いたら終了
 
@@ -88,15 +91,23 @@ def parse_args():
 
 
 def normalize_account(account: str):
-    """入力から (アカウントURL, ハンドル) を作る"""
-    account = account.strip()
-    if account.startswith("http"):
-        url = account.rstrip("/")
-        handle = url.rsplit("/", 1)[-1]
+    """入力から (アカウントURL, ハンドル) を作る。ハンドルはそのまま保存先フォルダ名になるので、
+    Xのユーザー名として有効な文字(英数字と_、15文字以内)だけを通す。不正ならValueError。"""
+    text = (account or "").strip()
+    if re.match(r"(www\.)?(x|twitter)\.com/", text, re.IGNORECASE):
+        text = "https://" + text   # スキーム無しで貼られたURLも受け付ける
+    if text.lower().startswith("http"):
+        # ?s=20 などのクエリや /status/… が付いていても、先頭のパス要素だけを使う
+        parts = [part for part in urlparse(text).path.split("/") if part]
+        handle = parts[0] if parts else ""
     else:
-        handle = account.lstrip("@")
-        url = f"https://x.com/{handle}"
-    return url, handle
+        handle = text.lstrip("@")
+    if not re.fullmatch(r"\w{1,15}", handle, re.ASCII):
+        raise ValueError(
+            f"アカウント名として読めません: {account!r}\n"
+            "（@handle か https://x.com/handle の形で入力してください）"
+        )
+    return f"https://x.com/{handle}", handle
 
 
 def load_seen_ids(state_path: Path) -> set:
@@ -129,18 +140,30 @@ def safe_goto(page, url, retries=3):
     raise last_err
 
 
-def ensure_logged_in(page):
-    """ログイン状態を確認し、未ログインなら手動ログインを待つ"""
+def cli_login_prompt():
+    """コマンドラインから実行したときのログイン待ち"""
+    print("=" * 60)
+    print("Xにログインしていません。開いたブラウザ画面で手動でログインしてください。")
+    print("ログインしてタイムライン(ホーム)が表示されたら、このターミナルに戻って")
+    print("Enterキーを押してください。")
+    print("=" * 60)
+    input("ログイン完了後、Enterキーを押してください... ")
+
+
+def ensure_logged_in(page, on_login_required=cli_login_prompt):
+    """ログイン状態を確認し、未ログインなら on_login_required() で完了を待つ"""
     safe_goto(page, "https://x.com/home")
     page.wait_for_timeout(2000)
-
     if not page.url.rstrip("/").endswith("/home"):
-        print("=" * 60)
-        print("Xにログインしていません。開いたブラウザ画面で手動でログインしてください。")
-        print("ログインしてタイムライン(ホーム)が表示されたら、このターミナルに戻って")
-        print("Enterキーを押してください。")
-        print("=" * 60)
-        input("ログイン完了後、Enterキーを押してください... ")
+        on_login_required()
+
+
+def scroll_one_step(page):
+    """タイムラインを画面の7割ぶんだけ進める。
+    Xは画面外の投稿をDOMから外すので、1画面より大きく進めると間の投稿を一度も
+    見ないまま通り過ぎて取りこぼす。"""
+    step = max(300, int((page.evaluate("window.innerHeight") or 900) * 0.7))
+    page.mouse.wheel(0, step)
 
 
 def extract_tweet_id(href):
@@ -165,6 +188,20 @@ def parse_relative_date(text: str, now: datetime):
     m = re.fullmatch(r"(\d+)d", text)
     if m:
         return now - timedelta(days=int(m.group(1)))
+    # 英語表示（アカウントの表示言語が英語のとき）: 「Sep 3」「Sep 3, 2025」
+    m = re.fullmatch(r"([A-Za-z]{3})[a-z]*\.? (\d{1,2})(?:, (\d{4}))?", text)
+    if m and m.group(1).title() in MONTHS_EN:
+        mo = MONTHS_EN.index(m.group(1).title()) + 1
+        d = int(m.group(2))
+        try:
+            if m.group(3):
+                return datetime(int(m.group(3)), mo, d)
+            candidate = datetime(now.year, mo, d)
+        except ValueError:
+            return None
+        if candidate > now:
+            candidate = candidate.replace(year=now.year - 1)
+        return candidate
     m = re.fullmatch(r"(\d+)年(\d+)月(\d+)日", text)
     if m:
         y, mo, d = map(int, m.groups())
@@ -292,7 +329,7 @@ def run(account_url: str, handle: str, days: int, out_dir: Path):
                 print(f"{days}日より古いポストが{STOP_AFTER_OLD}件連続したため終了します。")
                 break
 
-            page.mouse.wheel(0, 4000)
+            scroll_one_step(page)
             page.wait_for_timeout(1800)
 
             new_height = page.evaluate("document.body.scrollHeight")

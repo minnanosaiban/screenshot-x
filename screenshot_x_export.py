@@ -23,10 +23,11 @@
 import argparse
 import base64
 import csv
+import hashlib
 import io
 import json
 import shutil
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html import escape
 from pathlib import Path
 
@@ -109,6 +110,23 @@ def select_posts(archive: Archive, start: date, end: date, min_rank=None, log=pr
         log(f"  ※ 投稿日時が読めなかった {len(undated)}件は書き出せません: "
             + "、".join(undated[:5]) + ("…" if len(undated) > 5 else ""))
     return selected
+
+
+def verify_hashes(archive: Archive, selected, log=print):
+    """書き出す画像が、撮影時に台帳へ記録したSHA-256と一致するか確かめる。
+    不一致やファイル欠落は、改変・破損・移動の可能性があるので、書き出す前に知らせる。
+    戻り値は問題のあった件数。"""
+    problems = 0
+    for _, post in selected:
+        path = archive.posts_dir / post["filename"]
+        expected = post.get("sha256")
+        if not path.exists():
+            log(f"  ※ ファイルがありません: {post['filename']}")
+            problems += 1
+        elif expected and hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            log(f"  ※ 撮影時から内容が変わっています（SHA-256が一致しません）: {post['filename']}")
+            problems += 1
+    return problems
 
 
 # サイドノートに入れる項目。書き出しのときに個別に外せる。
@@ -222,7 +240,7 @@ def build_sidenote_project(archive: Archive, selected, title: str, items=None):
         "app": "sidenote-pdf",
         "version": 3,
         "title": title,
-        "savedAt": datetime.now().isoformat(timespec="milliseconds") + "Z",
+        "savedAt": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "mode": "text",
         "notesByAnchor": notes_by_anchor,
         "anchorIdSeq": 1,
@@ -365,10 +383,10 @@ def export_pdf(archive: Archive, selected, path: Path, title: str, log=print, it
     html_path = path.with_suffix(".html")
     slice_dir = path.parent / f"_{path.stem}_tmp"
     slice_dir.mkdir(exist_ok=True)
-    html_path.write_text(
-        build_pdf_html(archive, selected, title, items, slice_dir), encoding="utf-8"
-    )
     try:
+        html_path.write_text(
+            build_pdf_html(archive, selected, title, items, slice_dir), encoding="utf-8"
+        )
         with sync_playwright() as p:
             # 取得側と同じく、入っているGoogle Chrome(無ければEdge)を使う。
             # 既定のchromiumを使うと `playwright install chromium` が別途必要になり、
@@ -464,11 +482,15 @@ def export(
         log(f"{condition} に該当する投稿がアーカイブにありません。")
         return []
 
-    label = f"{start:%Y-%m-%d}_{end:%Y-%m-%d}"
-    suffix = ""
+    problems = verify_hashes(archive, selected, log=log)
+    if problems:
+        raise RuntimeError(
+            f"{problems}件のスクショに問題があるため書き出しを中止しました。上のログを確認してください。"
+        )
+
+    suffix = f"_{RANK_LABELS[min_rank]}以上" if min_rank else ""
+    label = f"{start:%Y-%m-%d}_{end:%Y-%m-%d}{suffix}"
     if min_rank:
-        label += f"_{RANK_LABELS[min_rank]}以上"
-        suffix = f"_{RANK_LABELS[min_rank]}以上"
         log(f"重要度「{RANK_LABELS[min_rank]}」以上に絞り込みます。")
     out_root = Path(out_root) if out_root else Path(root) / "書き出し"
     title = f"{handle}_{start:%Y%m%d}-{end:%Y%m%d}{suffix}"

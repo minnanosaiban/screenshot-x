@@ -135,6 +135,8 @@ class App:
 
         self.messages = queue.Queue()   # 作業スレッド → 画面 への連絡
         self.worker = None
+        self.refresh_job = None
+        self.archive_error = ""
         self.stop_flag = threading.Event()
         self.login_done = threading.Event()
 
@@ -180,8 +182,8 @@ class App:
         self.build_log()
         self.build_statusbar()
 
-        self.account.trace_add("write", lambda *_: self.refresh_account_info())
-        self.archive_root.trace_add("write", lambda *_: self.refresh_account_info())
+        self.account.trace_add("write", lambda *_: self.schedule_refresh())
+        self.archive_root.trace_add("write", lambda *_: self.schedule_refresh())
         self.refresh_account_info()
 
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -469,22 +471,43 @@ class App:
         root = Path(self.archive_root.get())
         if not root.exists():
             return []
-        return sorted(
-            d.name for d in root.iterdir() if d.is_dir() and (d / "manifest.json").exists()
-        )
+        try:
+            return sorted(
+                d.name for d in root.iterdir() if d.is_dir() and (d / "manifest.json").exists()
+            )
+        except OSError:
+            return []
 
     def current_archive(self):
+        """入力中のアカウントのアーカイブ。決められない(未入力・不正な名前・台帳が読めない)ときは
+        None を返し、理由を self.archive_error に残す。"""
+        self.archive_error = ""
         account = self.account.get().strip()
         if not account:
             return None
-        _, handle = normalize_account(account)
-        return detail.Archive(Path(self.archive_root.get()), handle)
+        try:
+            _, handle = normalize_account(account)
+            return detail.Archive(Path(self.archive_root.get()), handle)
+        except (ValueError, RuntimeError) as e:
+            self.archive_error = str(e)
+            return None
+
+    def schedule_refresh(self):
+        """入力のたびに台帳を読み直すと重い(OneDrive上では特に)ので、手が止まってから1回だけ更新する"""
+        if self.refresh_job is not None:
+            self.root.after_cancel(self.refresh_job)
+        self.refresh_job = self.root.after(400, self.run_refresh)
+
+    def run_refresh(self):
+        self.refresh_job = None
+        self.refresh_account_info()
 
     def refresh_account_info(self):
         self.account_box.configure(values=self.known_accounts())
         archive = self.current_archive()
         if archive is None:
-            self.save_dir_label.set("（アカウントを入力すると決まります）")
+            first_line = self.archive_error.split(chr(10))[0]
+            self.save_dir_label.set(first_line or "（アカウントを入力すると決まります）")
             self.history_label.configure(text="（まだありません）")
             return
         self.save_dir_label.set(str(archive.dir))
@@ -526,14 +549,23 @@ class App:
         # 幅を合わせて表示する。画面の拡大率の関係で、論理pxで縮めても実際にはほぼ原寸になる。
         # with で開くのは、表示中もPNGを掴んだままにしないため
         # （掴んでいると、そのファイルを別のソフトから移動・削除できなくなる）。
-        with Image.open(self.triage_archive.posts_dir / post["filename"]) as image:
-            ratio = TRIAGE_IMAGE_WIDTH / image.width
-            shown = image.resize(
-                (TRIAGE_IMAGE_WIDTH, round(image.height * ratio)), Image.LANCZOS
+        # 画像が移動・削除されていても、ここで例外にせず前後の移動や採点は続けられるようにする
+        try:
+            with Image.open(self.triage_archive.posts_dir / post["filename"]) as image:
+                ratio = TRIAGE_IMAGE_WIDTH / image.width
+                shown = image.resize(
+                    (TRIAGE_IMAGE_WIDTH, round(image.height * ratio)), Image.LANCZOS
+                )
+            self.triage_photo = ImageTk.PhotoImage(shown)   # 参照を持っていないと消える
+            self.triage_canvas.create_image(0, 0, anchor="nw", image=self.triage_photo)
+            self.triage_canvas.configure(scrollregion=(0, 0, shown.width, shown.height))
+        except (OSError, ValueError) as e:
+            self.triage_photo = None
+            self.triage_canvas.create_text(
+                20, 20, anchor="nw", width=TRIAGE_IMAGE_WIDTH - 40, fill="#b00020",
+                text=f"画像を開けません: {post['filename']}" + chr(10) + str(e),
             )
-        self.triage_photo = ImageTk.PhotoImage(shown)   # 参照を持っていないと消える
-        self.triage_canvas.create_image(0, 0, anchor="nw", image=self.triage_photo)
-        self.triage_canvas.configure(scrollregion=(0, 0, shown.width, shown.height))
+            self.triage_canvas.configure(scrollregion=(0, 0, TRIAGE_IMAGE_WIDTH, 120))
         self.triage_canvas.yview_moveto(0)
         self.fit_triage_image()
 
@@ -543,8 +575,10 @@ class App:
             text=datetime.fromisoformat(posted).strftime("%Y年%m月%d日 %H:%M") if posted else ""
         )
         self.triage_rank.set(str(post.get("rank") or ""))
+        self.triage_memo.configure(state="normal")
         self.triage_memo.delete("1.0", "end")
         self.triage_memo.insert("1.0", post.get("memo", "") or "")
+        self.sync_memo_state()
 
         counts = self.triage_archive.rank_counts()
         self.triage_progress.configure(
@@ -600,6 +634,10 @@ class App:
                 "index.csv を Excel などで開いている場合は、閉じてからやり直してください。",
             )
             return False
+
+    def sync_memo_state(self):
+        """取得・書き出し中はメモを書けなくする（保存できないまま入力が消えるのを防ぐ）"""
+        self.triage_memo.configure(state="disabled" if self.busy() else "normal")
 
     def commit_memo(self):
         """今表示している1枚のメモを保存する（画面が切り替わる前に必ず通す）"""
@@ -744,6 +782,7 @@ class App:
         self.append_log(label)
         self.worker = threading.Thread(target=target, args=args, daemon=True)
         self.worker.start()
+        self.sync_memo_state()
 
     # ---- 取得 ----
 
@@ -778,8 +817,12 @@ class App:
             messagebox.showwarning("期間", str(e))
             return
 
-        account_url, handle = normalize_account(account)
-        archive = detail.Archive(Path(self.archive_root.get()), handle)
+        try:
+            account_url, handle = normalize_account(account)
+            archive = detail.Archive(Path(self.archive_root.get()), handle)
+        except (ValueError, RuntimeError) as e:
+            messagebox.showwarning("アカウント", str(e))
+            return
         full_page = self.full_page.get()
         self.begin_work(
             self.work_capture,
@@ -812,7 +855,7 @@ class App:
             return
         archive = self.current_archive()
         if archive is None:
-            messagebox.showwarning("入力", "アカウントを入力してください。")
+            messagebox.showwarning("入力", self.archive_error or "アカウントを入力してください。")
             return
         if not (self.want_images.get() or self.want_json.get() or self.want_pdf.get()):
             messagebox.showwarning("入力", "作るものを1つ以上選んでください。")
@@ -868,6 +911,11 @@ class App:
             if not messagebox.askokcancel("終了", "実行中です。中止して終了しますか。"):
                 return
             self.stop_flag.set()
+            # 撮影の途中でスレッドごと打ち切るとChromeが残り、次回プロファイルが使えなくなることがある。
+            # ブラウザを閉じる後始末(finally)が終わるまで少し待ってから閉じる。
+            self.status.set("終了しています…")
+            self.root.update_idletasks()
+            self.worker.join(timeout=20)
         else:
             self.commit_memo()   # 書きかけのメモを捨てずに保存してから閉じる
         self.save_settings()
@@ -915,6 +963,7 @@ class App:
                     self.export_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
                     self.status.set("待機中")
+                    self.triage_memo.configure(state="normal")   # 終了直後はスレッドがまだ生きていて busy() が真になりうる
                     self.account_box.configure(values=self.known_accounts())
                     self.refresh_account_info()
                     # 取得で増えた分を仕分けに反映する（実行中は読み込みを止めていたため）

@@ -20,6 +20,10 @@ echo Current: %CD%
 
 echo === Commit ^& Push to GitHub (main) ===
 git add .
+echo === Files to be committed ===
+git status --short
+echo (chrome_profile / settings.json must NOT appear above. Close this window to cancel.)
+pause
 git commit -m "Update screenshot-x" || echo No changes to commit
 git push -u origin main
 if %errorlevel% neq 0 (
